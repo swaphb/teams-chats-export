@@ -56,6 +56,27 @@ python -m venv teams-chats-export-env
 pip install -r requirements.txt
 ```
 
+Alternatively, with Nix and flakes enabled, enter the pinned development shell and
+install the Python dependencies into a virtual environment:
+
+```sh
+nix develop
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+On later visits, run `nix develop` and `. .venv/bin/activate`. The flake pins
+Python through `flake.lock`; installing the Python packages requires network
+access. The versions explicitly pinned in `requirements.txt` are installed by
+pip, while unpinned and transitive dependencies may change over time.
+
+Run the tests from the activated environment:
+
+```sh
+python -m unittest discover -s tests -v
+```
+
 ### Run the script
 
 To archive your chats:
