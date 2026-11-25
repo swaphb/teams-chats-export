@@ -56,6 +56,27 @@ python -m venv teams-chats-export-env
 pip install -r requirements.txt
 ```
 
+Alternatively, with Nix and flakes enabled, enter the pinned development shell and
+install the Python dependencies into a virtual environment:
+
+```sh
+nix develop
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+On later visits, run `nix develop` and `. .venv/bin/activate`. The flake pins
+Python through `flake.lock`; installing the Python packages requires network
+access. The versions explicitly pinned in `requirements.txt` are installed by
+pip, while unpinned and transitive dependencies may change over time.
+
+Run the tests from the activated environment:
+
+```sh
+python -m unittest discover -s tests -v
+```
+
 ### Run the script
 
 To archive your chats:
@@ -89,6 +110,12 @@ Only "new" messages are downloaded, but this logic may not catch certain edge ca
 If you're missing messages or you don't see edits, or you just want to be absolutely sure
 you're downloading everything, run `python teams_chats_export.py download --force`
 to re-process all the available messages on Teams.
+
+Images hosted outside of Teams (GIFs, stickers, images linked from other sites) are
+rendered as links by default, so opening an exported chat doesn't contact those servers
+(which would reveal your IP address and fire any tracking pixels). To display them inline
+instead, run `python teams_chats_export.py generate_html --remote-images`. Images hosted
+on Teams are always embedded in the .html files.
 
 If you want to customize the html outputs, edit the files in `templates/` to your
 liking and re-run the generate_html step above.

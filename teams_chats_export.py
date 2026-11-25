@@ -1,8 +1,9 @@
 import argparse
 import asyncio
 import base64
-from functools import cache
+from functools import cache, partial
 import glob
+import html
 import json
 import os
 import pprint
@@ -11,9 +12,11 @@ import shutil
 import sys
 from typing import Dict, Optional
 
+import bleach
 from azure.identity import InteractiveBrowserCredential
 import dateparser
 from jinja2 import Environment, FileSystemLoader
+from markupsafe import Markup, escape
 from kiota_abstractions.native_response_handler import NativeResponseHandler
 from kiota_http.middleware.options import ResponseHandlerOption
 from msgraph import GraphServiceClient
@@ -53,7 +56,7 @@ def merge_dirs(old_dir, new_dir):
 
 @cache
 def get_jinja_env():
-    jinja_env = Environment(loader=FileSystemLoader("templates"))
+    jinja_env = Environment(loader=FileSystemLoader("templates"), autoescape=True)
     jinja_env.filters["localdt"] = localdt
     return jinja_env
 
@@ -287,23 +290,26 @@ def render_hosted_content(msg: Dict, hosted_content_id: str, chat_dir: str):
     return data
 
 
-def render_message_body(msg: Dict, chat_dir: str, html_dir: str) -> Optional[str]:
-    """render a single message body, including its attachments"""
+def render_message_body(msg: Dict, chat_dir: str, html_dir: str, remote_images: bool = False) -> Optional[str]:
+    """
+    render a single message body, including its attachments. images hosted outside of
+    Graph are linked instead of loaded unless remote_images is set.
+    """
 
     def get_attachment(match):
         attachment_id = match.group(1)
         attachment = [a for a in msg["attachments"] if a["id"] == attachment_id][0]
         if attachment["contentType"] == "reference":
-            return f"Attachment: <a href='{attachment['contentUrl']}' data-attachment-id='{attachment['id']}'>{attachment['name']}</a><br/>"
+            return f"Attachment: <a href='{escape(attachment['contentUrl'])}' data-attachment-id='{escape(attachment['id'])}'>{escape(attachment['name'])}</a><br/>"
         elif attachment["contentType"] == "messageReference":
             ref = json.loads(attachment["content"])
-            return f"<blockquote class='message-reference' data-attachment-id='{attachment['id']}'>{ref['messageSender']['user']['displayName']}: {ref['messagePreview']}</blockquote>"
+            return f"<blockquote class='message-reference' data-attachment-id='{escape(attachment['id'])}'>{escape(ref['messageSender']['user']['displayName'])}: {escape(ref['messagePreview'])}</blockquote>"
         elif attachment["contentType"] == "application/vnd.microsoft.card.codesnippet":
             hosted_content_id = get_hosted_content_id(attachment)
             content = render_hosted_content(msg, hosted_content_id, chat_dir)
-            return f"<div class='hosted-content' data-attachment-id='{attachment['id']}' data-hosted-content-id='{hosted_content_id}'><pre><code>{content}</code></pre></div>"
+            return f"<div class='hosted-content' data-attachment-id='{escape(attachment['id'])}' data-hosted-content-id='{escape(hosted_content_id)}'><pre><code>{escape(content)}</code></pre></div>"
         else:
-            return f"Attachment (raw data): {pprint.pformat(attachment)}<br/>"
+            return f"Attachment (raw data): {escape(pprint.pformat(attachment))}<br/>"
 
     def get_image(match):
         whole_match = match.group(0)
@@ -318,6 +324,30 @@ def render_message_body(msg: Dict, chat_dir: str, html_dir: str) -> Optional[str
         else:
             return whole_match
 
+    def get_tag_attribute(tag, name):
+        # the lookbehind keeps e.g. data-src from matching src
+        attr = re.search(rf"""(?<![\w-]){name}=(["'])(.*?)\1""", tag, re.IGNORECASE)
+        return html.unescape(attr.group(2)) if attr else None
+
+    def link_remote_images(v):
+        """replace remote images with links, or with plain text when already inside a link"""
+        in_link = False
+
+        def replace(match):
+            nonlocal in_link
+            tag = match.group(0)
+            if tag[1].lower() != "i":
+                # <a ...> or </a>
+                in_link = tag[1] != "/"
+                return tag
+            url = get_tag_attribute(tag, "src")
+            if not url or not re.match(r"^https?://", url.strip(), re.IGNORECASE):
+                return tag
+            label = f"Image: {escape(get_tag_attribute(tag, 'alt') or url)}"
+            return label if in_link else f"<a href='{escape(url)}'>{label}</a>"
+
+        return re.sub(r"""<(?:img|a|/a)\b(?:"[^"]*"|'[^']*'|[^'">])*>""", replace, v, flags=re.IGNORECASE)
+
     if msg["body"] and msg["body"]["content"]:
         v = msg["body"]["content"]
         if v:
@@ -330,12 +360,35 @@ def render_message_body(msg: Dict, chat_dir: str, html_dir: str) -> Optional[str
 
             # loosey-goosey matching here :(
             v = re.sub('src="(.+?)"', get_image, v)
-        return v
+
+            if not remote_images:
+                v = link_remote_images(v)
+        return Markup(bleach.clean(
+            v,
+            tags={"p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6", "a", "img", "b", "strong", "i", "em", "u", "s", "strike", "del", "sup", "sub", "blockquote", "div", "span", "pre", "code", "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td"},
+            attributes=partial(safe_html_attribute, remote_images=remote_images),
+            protocols={"http", "https", "mailto", "data"},
+            strip=True,
+        ))
 
     return None
 
 
-def render_chat(chat: Dict, output_dir: str):
+def safe_html_attribute(tag, name, value, remote_images=False):
+    """Allow only safe attributes, embedded images generated by the exporter, and (optionally) remote http(s) images."""
+    if name in {"class", "title", "alt", "data-attachment-id", "data-hosted-content-id"}:
+        return True
+    if tag == "a" and name == "href":
+        return bool(re.match(r"^(?:https?://|mailto:)", value.strip(), re.IGNORECASE))
+    if tag == "img" and name == "src":
+        return bool(re.fullmatch(r"data:image/png;base64,[A-Za-z0-9+/]*={0,2}", value)
+                    or (remote_images and re.match(r"^https?://", value.strip(), re.IGNORECASE)))
+    if tag == "img" and name in {"width", "height"}:
+        return value.isdigit()
+    return False
+
+
+def render_chat(chat: Dict, output_dir: str, remote_images: bool = False):
     """
     render a single chat to an html file. returns the name of the file rendered.
     """
@@ -351,7 +404,7 @@ def render_chat(chat: Dict, output_dir: str):
         with open(path, "r") as f:
             msg = json.load(f)
             dt = dateparser.parse(msg["createdDateTime"])
-            msgs.append({"obj": msg, "content": render_message_body(msg, chat_dir, html_dir), "createdDateTime": int(dt.timestamp() * 1000), })
+            msgs.append({"obj": msg, "content": render_message_body(msg, chat_dir, html_dir, remote_images), "createdDateTime": int(dt.timestamp() * 1000), })
     msgs.sort(key=lambda msg: msg['obj']['id'])
     # write out the html file
 
@@ -370,7 +423,7 @@ def render_chat(chat: Dict, output_dir: str):
     return filename
 
 
-def render_all(output_dir):
+def render_all(output_dir, remote_images=False):
     """render all the chats to html files"""
 
     all_chats = []
@@ -382,7 +435,7 @@ def render_all(output_dir):
         with open(path, "r") as f:
             chat = json.load(f)
 
-            filename = render_chat(chat, output_dir)
+            filename = render_chat(chat, output_dir, remote_images)
 
             chat_name = get_chat_name(chat)
 
@@ -416,12 +469,13 @@ def main():
     parser.add_argument("command", choices=["download", "generate_html"])
     parser.add_argument("--output-dir", type=str, default="archive")
     parser.add_argument("--force", help="download all msgs, not just 'newest' ones", action="store_true")
+    parser.add_argument("--remote-images", help="load images hosted outside Teams from their original servers when viewing the html, instead of linking to them", action="store_true")
     args = parser.parse_args()
 
     if args.command == "download":
         asyncio.run(download_all(args.output_dir, args.force))
     elif args.command == "generate_html":
-        render_all(args.output_dir)
+        render_all(args.output_dir, args.remote_images)
     else:
         print(f"Error: unrecognized command '{args.command}'")
 
