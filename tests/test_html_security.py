@@ -7,9 +7,9 @@ from teams_chats_export import get_hosted_content_filename, get_jinja_env, rende
 
 
 class HtmlSecurityTests(unittest.TestCase):
-    def render_body(self, content, attachments=None, chat_dir=""):
+    def render_body(self, content, attachments=None, chat_dir="", remote_images=False):
         return str(render_message_body(
-            {"id": "m1", "body": {"content": content}, "attachments": attachments or []}, chat_dir, ""
+            {"id": "m1", "body": {"content": content}, "attachments": attachments or []}, chat_dir, "", remote_images
         ))
 
     def write_hosted_content(self, chat_dir, hosted_content_id, data):
@@ -40,12 +40,20 @@ class HtmlSecurityTests(unittest.TestCase):
         self.assertIn('href="https://example.org/"', result)
         self.assertIn('src="data:image/png;base64,YQ=="', result)
 
-    def test_remote_images_and_formatting_survive(self):
-        result = self.render_body('<h2>Title</h2><hr><p>x<sup>2</sup><strike>old</strike><img src="https://example.org/a.gif" width="40" height="bad"></p>')
+    def test_extra_formatting_survives(self):
+        result = self.render_body('<h2>Title</h2><hr><p>x<sup>2</sup><strike>old</strike></p>')
         self.assertIn('<h2>Title</h2>', result)
         self.assertIn('<hr>', result)
         self.assertIn('<sup>2</sup>', result)
         self.assertIn('<strike>old</strike>', result)
+
+    def test_remote_images_are_linked_by_default(self):
+        result = self.render_body('<p><img alt="cat <b>gif</b>" src="https://example.org/a.gif?x=1&amp;y=2" width="40"></p>')
+        self.assertNotIn('<img', result)
+        self.assertIn('<a href="https://example.org/a.gif?x=1&amp;y=2">Image: cat &lt;b&gt;gif&lt;/b&gt;</a>', result)
+
+    def test_remote_images_load_when_enabled(self):
+        result = self.render_body('<p><img src="https://example.org/a.gif" width="40" height="bad"></p>', remote_images=True)
         self.assertIn('src="https://example.org/a.gif"', result)
         self.assertIn('width="40"', result)
         self.assertNotIn('height=', result)

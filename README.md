@@ -111,6 +111,12 @@ If you're missing messages or you don't see edits, or you just want to be absolu
 you're downloading everything, run `python teams_chats_export.py download --force`
 to re-process all the available messages on Teams.
 
+Images hosted outside of Teams (GIFs, stickers, images linked from other sites) are
+rendered as links by default, so opening an exported chat doesn't contact those servers
+(which would reveal your IP address and fire any tracking pixels). To display them inline
+instead, run `python teams_chats_export.py generate_html --remote-images`. Images hosted
+on Teams are always embedded in the .html files.
+
 If you want to customize the html outputs, edit the files in `templates/` to your
 liking and re-run the generate_html step above.
 
