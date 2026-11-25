@@ -102,9 +102,12 @@ def chat_matches(chat: dict, patterns: Optional[list]) -> bool:
     if not patterns:
         return True
     values = [get_chat_name(chat).lower(), chat["id"].lower()]
+    if chat["topic"]:
+        values.append(chat["topic"].lower())
 
     def matches(pattern):
-        return any(fnmatch.fnmatchcase(v, pattern.lower()) for v in values)
+        pattern = pattern.lower().replace("[", "[[]")
+        return any(fnmatch.fnmatchcase(v, pattern) for v in values)
 
     includes = [p for p in patterns if not p.startswith("!")]
     excludes = [p[1:] for p in patterns if p.startswith("!")]

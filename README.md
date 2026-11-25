@@ -149,6 +149,8 @@ matches any run of characters and `?` matches one character. A chat's name is it
 topic, or for chats without a topic, a comma-separated list of its members in
 alphabetical order. That member list changes when people join or leave, so use the ID
 for those chats. If the file contains only `!` patterns, every other chat is exported.
+Topics containing `/` match both the original topic and the name displayed by
+`list_chats`, where `/` is replaced by `_`. Square brackets match literally.
 
 To see each chat's name and ID, run:
 
