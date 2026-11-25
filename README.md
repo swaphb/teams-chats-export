@@ -129,6 +129,44 @@ rendered as links by default, so opening an exported chat doesn't contact those 
 instead, run `python teams_chats_export.py generate_html --remote-images`. Images hosted
 on Teams are always embedded in the .html files.
 
+### Choosing which chats to export
+
+By default every chat is exported. To export only some of them, pass `--chats-file`
+with a text file of wildcard patterns, one per line:
+
+```text
+# lines starting with # are comments; blank lines are ignored
+Project Phoenix*
+*Alice Smith*
+19:0123abcd@thread.v2
+
+# a leading ! excludes chats, even ones matched above
+!*Lunch*
+```
+
+Each pattern is matched case-insensitively against the chat's name and its ID. `*`
+matches any run of characters and `?` matches one character. A chat's name is its
+topic, or for chats without a topic, a comma-separated list of its members in
+alphabetical order. That member list changes when people join or leave, so use the ID
+for those chats. If the file contains only `!` patterns, every other chat is exported.
+
+To see each chat's name and ID, run:
+
+```sh
+CLIENT_ID="..." python teams_chats_export.py list_chats
+```
+
+`list_chats` also accepts `--chats-file`, so you can check which chats a file selects
+before downloading. Then pass the same file to both steps:
+
+```sh
+CLIENT_ID="..." python teams_chats_export.py download --chats-file chats.txt
+python teams_chats_export.py generate_html --chats-file chats.txt
+```
+
+Filtering doesn't delete anything already in the archive directory. Chats downloaded
+earlier stay in `data`, and `generate_html` without `--chats-file` still renders them.
+
 If you want to customize the html outputs, edit the files in `templates/` to your
 liking and re-run the generate_html step above.
 

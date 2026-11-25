@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import base64
+import fnmatch
 from functools import cache, partial
 import glob
 import html
@@ -84,6 +85,32 @@ def get_chat_name(chat: dict):
     else:
         name = get_member_list(chat)
     return name
+
+
+def load_chat_patterns(path: str) -> list:
+    """read chat filter patterns from a file, one per line, skipping blanks and # comments"""
+    with open(path, "r", encoding="utf-8") as f:
+        lines = [line.strip() for line in f]
+    return [line for line in lines if line and not line.startswith("#")]
+
+
+def chat_matches(chat: dict, patterns: Optional[list]) -> bool:
+    """
+    check a chat against wildcard patterns, matched case-insensitively against its name and id.
+    patterns starting with "!" exclude chats. if there are only exclude patterns, all other chats match.
+    """
+    if not patterns:
+        return True
+    values = [get_chat_name(chat).lower(), chat["id"].lower()]
+
+    def matches(pattern):
+        return any(fnmatch.fnmatchcase(v, pattern.lower()) for v in values)
+
+    includes = [p for p in patterns if not p.startswith("!")]
+    excludes = [p[1:] for p in patterns if p.startswith("!")]
+    if any(matches(p) for p in excludes):
+        return False
+    return not includes or any(matches(p) for p in includes)
 
 
 def get_hosted_content_filename(msg_id, hosted_content_id):
@@ -262,15 +289,8 @@ async def download_chat(client, chat: Dict, data_dir: str, force: bool):
     await download_messages(client, chat, chat_dir, force)
 
 
-async def download_all(output_dir: str, force: bool):
-    """download all chats"""
-    data_dir = os.path.join(output_dir, "data")
-    makedir(data_dir)
-
-    client = get_graph_client()
-
-    print("Opening browser window for authentication")
-
+async def fetch_all_chats(client):
+    """yield every chat the user belongs to, with members and last message preview"""
     query_params = ChatsRequestBuilder.ChatsRequestBuilderGetQueryParameters(
         expand=["members", "lastMessagePreview"], top=50
     )
@@ -279,7 +299,34 @@ async def download_all(output_dir: str, force: bool):
         query_parameters=query_params,
     )
     async for chat in fetch_all_for_request(client.me.chats, request_config):
+        yield chat
+
+
+async def download_all(output_dir: str, force: bool, patterns: Optional[list] = None):
+    """download all chats, or only those matching patterns"""
+    data_dir = os.path.join(output_dir, "data")
+    makedir(data_dir)
+
+    client = get_graph_client()
+
+    print("Opening browser window for authentication")
+
+    async for chat in fetch_all_chats(client):
+        if not chat_matches(chat, patterns):
+            print(f"Skipping chat {get_chat_name(chat)} (id {chat['id']})")
+            continue
         await download_chat(client, chat, data_dir, force)
+
+
+async def list_chats(patterns: Optional[list] = None):
+    """print the name and id of each chat, or only those matching patterns"""
+    client = get_graph_client()
+
+    print("Opening browser window for authentication")
+
+    async for chat in fetch_all_chats(client):
+        if chat_matches(chat, patterns):
+            print(f"{get_chat_name(chat)}\t{chat['id']}")
 
 
 def render_hosted_content(msg: Dict, hosted_content_id: str, chat_dir: str):
@@ -423,8 +470,8 @@ def render_chat(chat: Dict, output_dir: str, remote_images: bool = False):
     return filename
 
 
-def render_all(output_dir, remote_images=False):
-    """render all the chats to html files"""
+def render_all(output_dir, remote_images=False, patterns=None):
+    """render all the chats to html files, or only those matching patterns"""
 
     all_chats = []
 
@@ -434,6 +481,9 @@ def render_all(output_dir, remote_images=False):
     for path in chat_files:
         with open(path, "r") as f:
             chat = json.load(f)
+
+            if not chat_matches(chat, patterns):
+                continue
 
             filename = render_chat(chat, output_dir, remote_images)
 
@@ -466,16 +516,21 @@ def get_graph_client() -> GraphServiceClient:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["download", "generate_html"])
+    parser.add_argument("command", choices=["download", "generate_html", "list_chats"])
     parser.add_argument("--output-dir", type=str, default="archive")
     parser.add_argument("--force", help="download all msgs, not just 'newest' ones", action="store_true")
     parser.add_argument("--remote-images", help="load images hosted outside Teams from their original servers when viewing the html, instead of linking to them", action="store_true")
+    parser.add_argument("--chats-file", help="file of wildcard patterns, one per line, matched against chat names and ids; prefix a pattern with ! to exclude matching chats", type=str)
     args = parser.parse_args()
 
+    patterns = load_chat_patterns(args.chats_file) if args.chats_file else None
+
     if args.command == "download":
-        asyncio.run(download_all(args.output_dir, args.force))
+        asyncio.run(download_all(args.output_dir, args.force, patterns))
     elif args.command == "generate_html":
-        render_all(args.output_dir, args.remote_images)
+        render_all(args.output_dir, args.remote_images, patterns)
+    elif args.command == "list_chats":
+        asyncio.run(list_chats(patterns))
     else:
         print(f"Error: unrecognized command '{args.command}'")
 
