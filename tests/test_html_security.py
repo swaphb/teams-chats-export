@@ -52,6 +52,21 @@ class HtmlSecurityTests(unittest.TestCase):
         self.assertNotIn('<img', result)
         self.assertIn('<a href="https://example.org/a.gif?x=1&amp;y=2">Image: cat &lt;b&gt;gif&lt;/b&gt;</a>', result)
 
+    def test_remote_image_link_ignores_data_src(self):
+        result = self.render_body('<p><img data-src="https://example.org/lazy.gif" src="data:image/png;base64,YQ=="></p>')
+        self.assertIn('src="data:image/png;base64,YQ=="', result)
+        self.assertNotIn('<a', result)
+
+    def test_single_quoted_remote_images_are_linked(self):
+        result = self.render_body("<p><img alt='cat' src='https://example.org/a.gif'></p>")
+        self.assertNotIn('<img', result)
+        self.assertIn('<a href="https://example.org/a.gif">Image: cat</a>', result)
+
+    def test_remote_image_inside_link_keeps_link_text(self):
+        result = self.render_body('<p><a href="https://example.org/page"><img src="https://example.org/a.gif" alt="cat"></a></p>')
+        self.assertIn('<a href="https://example.org/page">Image: cat</a>', result)
+        self.assertEqual(result.count('<a '), 1)
+
     def test_remote_images_load_when_enabled(self):
         result = self.render_body('<p><img src="https://example.org/a.gif" width="40" height="bad"></p>', remote_images=True)
         self.assertIn('src="https://example.org/a.gif"', result)

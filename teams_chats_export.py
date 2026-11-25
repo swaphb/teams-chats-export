@@ -324,15 +324,29 @@ def render_message_body(msg: Dict, chat_dir: str, html_dir: str, remote_images: 
         else:
             return whole_match
 
-    def get_remote_image_link(match):
-        whole_match = match.group(0)
-        src = re.search('src="(.+?)"', whole_match)
-        if src and re.match(r"^https?://", src.group(1).strip(), re.IGNORECASE):
-            url = html.unescape(src.group(1))
-            alt = re.search('alt="(.+?)"', whole_match)
-            label = html.unescape(alt.group(1)) if alt else url
-            return f"<a href='{escape(url)}'>Image: {escape(label)}</a>"
-        return whole_match
+    def get_tag_attribute(tag, name):
+        # the lookbehind keeps e.g. data-src from matching src
+        attr = re.search(rf"""(?<![\w-]){name}=(["'])(.*?)\1""", tag, re.IGNORECASE)
+        return html.unescape(attr.group(2)) if attr else None
+
+    def link_remote_images(v):
+        """replace remote images with links, or with plain text when already inside a link"""
+        in_link = False
+
+        def replace(match):
+            nonlocal in_link
+            tag = match.group(0)
+            if tag[1].lower() != "i":
+                # <a ...> or </a>
+                in_link = tag[1] != "/"
+                return tag
+            url = get_tag_attribute(tag, "src")
+            if not url or not re.match(r"^https?://", url.strip(), re.IGNORECASE):
+                return tag
+            label = f"Image: {escape(get_tag_attribute(tag, 'alt') or url)}"
+            return label if in_link else f"<a href='{escape(url)}'>{label}</a>"
+
+        return re.sub(r"""<(?:img|a|/a)\b(?:"[^"]*"|'[^']*'|[^'">])*>""", replace, v, flags=re.IGNORECASE)
 
     if msg["body"] and msg["body"]["content"]:
         v = msg["body"]["content"]
@@ -348,7 +362,7 @@ def render_message_body(msg: Dict, chat_dir: str, html_dir: str, remote_images: 
             v = re.sub('src="(.+?)"', get_image, v)
 
             if not remote_images:
-                v = re.sub(r'<img\b(?:"[^"]*"|\'[^\']*\'|[^\'">])*>', get_remote_image_link, v)
+                v = link_remote_images(v)
         return Markup(bleach.clean(
             v,
             tags={"p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6", "a", "img", "b", "strong", "i", "em", "u", "s", "strike", "del", "sup", "sub", "blockquote", "div", "span", "pre", "code", "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td"},
