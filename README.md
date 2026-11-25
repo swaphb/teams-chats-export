@@ -69,13 +69,25 @@ python -m pip install -r requirements.txt
 On later visits, run `nix develop` and `. .venv/bin/activate`. The flake pins
 Python through `flake.lock`; installing the Python packages requires network
 access. The versions explicitly pinned in `requirements.txt` are installed by
-pip, while unpinned and transitive dependencies may change over time.
+pip, while transitive dependencies may change over time.
 
 Run the tests from the activated environment:
 
 ```sh
 python -m unittest discover -s tests -v
 ```
+
+### Dependency updates
+
+After these configurations are merged into the fork's default branch, Dependabot
+checks the direct Python dependencies and GitHub Actions weekly and opens grouped
+pull requests against `main`. A separate weekly workflow updates `flake.lock` and
+opens a pull request against `main`; it can also be run manually from the Actions
+tab. The repository's Actions settings must allow GitHub Actions to create pull
+requests. Pull requests created with `GITHUB_TOKEN` do not automatically trigger
+other Actions workflows; close and reopen the flake update PR to run them.
+Transitive Python dependencies are resolved by pip at installation time and are
+not locked by this configuration.
 
 ### Run the script
 
